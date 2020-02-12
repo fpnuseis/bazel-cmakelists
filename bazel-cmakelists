@@ -45,9 +45,9 @@ def GetBasePath(fn):
 def ConvertGeneratedPath(fn):
   bazel_root = 'bazel-' + FLAGS.project
   if FLAGS.mac_debug:
-    genfiles_root = path.join('bazel-out', 'local-dbg', 'genfiles')
+    genfiles_root = path.join('bazel-out', 'local-dbg', 'bin')
   if not FLAGS.mac_debug:
-    genfiles_root = 'bazel-genfiles'
+    genfiles_root = 'bazel-bin'
   return path.realpath(path.join(genfiles_root, GetBasePath(fn)))
 
 def ConvertExternalPath(fn):
@@ -68,7 +68,7 @@ def run_bazel(args):
 def ExtractSources():
   query = 'kind("source file", deps(kind("cc_.* rule", deps(kind("cc_.* rule", %s)))))' % QueryTargets()
   sources = []
-  for fn in run_bazel(['query', '--noimplicit_deps', query]).splitlines():
+  for fn in run_bazel(['query', '--package_path', '%workspace%:/source', '--noimplicit_deps', query]).splitlines():
     if (not FLAGS.external) and EXTERNAL_PATTERN.match(fn):
       continue
     fn = GetBasePath(fn)
@@ -79,7 +79,7 @@ def ExtractSources():
 def ExtractGenerated():
   query = 'kind("generated file", deps(kind("cc_.* rule", deps(kind("cc_.* rule", %s)))))' % QueryTargets()
   sources = []
-  for fn in run_bazel(['query', '--noimplicit_deps', query]).splitlines():
+  for fn in run_bazel(['query', '--package_path', '%workspace%:/source', '--noimplicit_deps', query]).splitlines():
     fn = ConvertGeneratedPath(fn)
     if path.splitext(fn)[1] in SOURCE_EXTENSION:
       sources.append(fn)
@@ -88,7 +88,7 @@ def ExtractGenerated():
 def ExtractIncludes():
   query = 'kind(cc_library, deps(kind("cc_.* rule", %s)))' % QueryTargets()
   includes = []
-  xml = run_bazel(['query', '--noimplicit_deps', query, '--output', 'xml'])
+  xml = run_bazel(['query', '--package_path', '%workspace%:/source', '--noimplicit_deps', query, '--output', 'xml'])
   tree = ET.fromstring(xml)
   for e in tree.findall(".//list[@name='includes']/.."):
     prefix = e.attrib['name'].split(':')[0]
@@ -114,14 +114,14 @@ def ExtractIncludes():
   for d in os.listdir('bazel-%s/external' % FLAGS.project):
     if os.path.isdir('bazel-%s/external/%s' % (FLAGS.project, d)):
       includes.append(path.realpath('bazel-%s/external/%s' % (FLAGS.project, d)))
-    if os.path.isdir('bazel-genfiles/external/%s' % d):
-      includes.append(path.realpath('bazel-genfiles/external/%s' % d))
+    if os.path.isdir('bazel-bin/external/%s' % d):
+      includes.append(path.realpath('bazel-bin/external/%s' % d))
 
   return set(includes)
 
 def ExtractDefines():
   query = 'attr("defines", "", deps(kind("cc_.* rule", %s)))' % QueryTargets()
-  xml = run_bazel(['query', '--noimplicit_deps', query, '--output', 'xml'])
+  xml = run_bazel(['query', '--package_path', '%workspace%:/source', '--noimplicit_deps', query, '--output', 'xml'])
   tree = ET.fromstring(xml)
   defines = []
   for e in tree.findall(".//list[@name='defines']/string"):
@@ -130,7 +130,7 @@ def ExtractDefines():
 
 def ExtractCopts():
   query = 'attr("copts", "", deps(kind("cc_.* rule", %s)))' % QueryTargets()
-  xml = run_bazel(['query', '--noimplicit_deps', query, '--output', 'xml'])
+  xml = run_bazel(['query', '--package_path', '%workspace%:/source', '--noimplicit_deps', query, '--output', 'xml'])
   tree = ET.fromstring(xml)
   copts = []
   for e in tree.findall(".//list[@name='copts']/string"):
@@ -139,7 +139,7 @@ def ExtractCopts():
 
 def GenerateCMakeList():
   if not FLAGS.skip_build:
-    bazel_args = ['build']
+    bazel_args=['build', '--strategy=Genrule=standalone', '--spawn_strategy=standalone', '--verbose_failures', '--package_path', '%workspace%:/source', '--action_env=HOME', '--action_env=PYTHONUSERBASE', '--jobs=4', '--show_task_finish', '-c', 'opt']
     bazel_args.extend(FLAGS.targets)
     bazel_args.extend(FLAGS.bazel_args[1:])
     run_bazel(bazel_args)
@@ -181,9 +181,9 @@ def GenerateCMakeList():
     cmakelist.write("set(INCLUDE_DIRECTORIES\n    ")
     cmakelist.write("\n    ".join(includes))
     if FLAGS.mac_debug:
-      cmakelist.write("\n    bazel-out/local-dbg/genfiles")
+      cmakelist.write("\n    bazel-out/local-dbg/bin")
     else:
-      cmakelist.write("\n    %s" % path.realpath("bazel-genfiles"))
+      cmakelist.write("\n    %s" % path.realpath("bazel-bin"))
     cmakelist.write("\n    %s)\n\n" % path.realpath("."))
     if len(defines) > 0:
       cmakelist.write("add_definitions(\n    -D")
